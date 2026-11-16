@@ -219,35 +219,25 @@ if modo_comparacao:
   ).drop_duplicates("uf")
   df_mapa = df_lideres.set_index("uf")
 
-  ranking_por_uf = {}
-  for uf, grupo in df_agg.sort_values(
-      "pontos_ibope", ascending=False
-  ).groupby("uf"):
-    linhas = []
-    for idx, (_, row) in enumerate(grupo.iterrows()):
-      cor_em = emissoras_config[row["emissora"]]["cor_rgb"]
-      cor_css = f"rgb({cor_em[0]},{cor_em[1]},{cor_em[2]})"
-      badge = "🏆 " if idx == 0 else ""
-      # [CORRIGIDO] Uso exclusivo de tags inline (span, b) e <br> compatíveis com o PyDeck
-      linhas.append(
-          f"<span style='color:{cor_css}; font-weight:800;'>{badge}{row['emissora']}</span>:"
-          f" <b>{row['pontos_ibope']:.1f} pts</b> ({row['share_pct']:.1f}%)"
-      )
-    ranking_por_uf[uf] = (
-        f"<div style='margin-top: 4px;'>" + "<br>".join(linhas) + "</div>"
-    )
-
   for feature in geojson_dinamico["features"]:
     uf = feature["properties"]["sigla"]
     if uf in df_mapa.index:
       lider = df_mapa.loc[uf, "emissora"]
+      pts = float(df_mapa.loc[uf, "pontos_ibope"])
+      shr = float(df_mapa.loc[uf, "share_pct"])
       r, g, b = emissoras_config[lider]["cor_rgb"]
+
       feature["properties"]["titulo_destaque"] = f"{titulo_prefixo}{lider}"
-      feature["properties"]["detalhe_html"] = ranking_por_uf.get(uf, "")
+      # [CORRIGIDO] Atribuição de propriedades primitivas limpas (evita injeção de HTML complexo)
+      feature["properties"]["veiculo_destaque"] = lider
+      feature["properties"]["pontos_ibope"] = f"{pts:.1f} pts"
+      feature["properties"]["share_pct"] = f"{shr:.1f}%"
       feature["properties"]["fill_color"] = [r, g, b, 205]
     else:
       feature["properties"]["titulo_destaque"] = "Sem dados no período"
-      feature["properties"]["detalhe_html"] = ""
+      feature["properties"]["veiculo_destaque"] = "-"
+      feature["properties"]["pontos_ibope"] = "0.0 pts"
+      feature["properties"]["share_pct"] = "0.0%"
       feature["properties"]["fill_color"] = [203, 213, 225, 80]
 
   itens_legenda = "".join([
@@ -276,16 +266,17 @@ else:
       shr = float(df_mapa.loc[uf, "share_pct"])
       norm = (pts - min_pts) / max((max_pts - min_pts), 0.1)
       alpha = int(65 + (norm * 175))
+
       feature["properties"]["titulo_destaque"] = f"VEÍCULO: {emissora_unica}"
-      feature["properties"]["detalhe_html"] = (
-          f"<div style='font-size:13px; margin-top:4px;'>Audiência: <b"
-          f" style='color:#0284C7;'>{pts:.1f} pts</b></div><div"
-          f" style='font-size:12px;'>Share: <b>{shr:.1f}%</b></div>"
-      )
+      feature["properties"]["veiculo_destaque"] = emissora_unica
+      feature["properties"]["pontos_ibope"] = f"{pts:.1f} pts"
+      feature["properties"]["share_pct"] = f"{shr:.1f}%"
       feature["properties"]["fill_color"] = [r_base, g_base, b_base, alpha]
     else:
       feature["properties"]["titulo_destaque"] = "Sem dados"
-      feature["properties"]["detalhe_html"] = ""
+      feature["properties"]["veiculo_destaque"] = "-"
+      feature["properties"]["pontos_ibope"] = "0.0 pts"
+      feature["properties"]["share_pct"] = "0.0%"
       feature["properties"]["fill_color"] = [203, 213, 225, 80]
 
   bloco_legenda = (
@@ -344,7 +335,7 @@ camada_estados = pdk.Layer(
     extruded=False,
     get_fill_color="properties.fill_color",
     get_line_color=[15, 23, 42, 160],
-    line_width_min_pixels=1.2,
+    link_width_min_pixels=1.2,
     pickable=True,
     auto_highlight=True,
     highlight_color=[250, 204, 21, 140],
@@ -354,13 +345,16 @@ view_state = pdk.ViewState(
     latitude=-14.2350, longitude=-51.9253, zoom=3.4, pitch=0, bearing=0
 )
 
+# [CORRIGIDO] Template fixo seguro em HTML nativo do deck.gl interpolando apenas propriedades textuais puras
 tooltip = {
     "html": """
-        <div style='font-family: Segoe UI, sans-serif; padding: 8px; min-width: 215px;'>
+        <div style='font-family: Segoe UI, sans-serif; padding: 8px; min-width: 200px;'>
             <div style='font-size: 10px; color: #64748B; text-transform: uppercase; font-weight: bold;'>Estado ({sigla})</div>
             <div style='font-size: 14px; font-weight: 800; color: #0284C7;'>{name}</div>
             <div style='font-size: 11px; font-weight: 800; color: #334155; margin-bottom: 6px; border-bottom: 1px solid #E2E8F0; padding-bottom: 4px;'>{titulo_destaque}</div>
-            {detalhe_html}
+            <div style='font-size: 12px; margin-top: 4px;'>Veículo: <b>{veiculo_destaque}</b></div>
+            <div style='font-size: 12px;'>Audiência: <b>{pontos_ibope}</b></div>
+            <div style='font-size: 12px;'>Share: <b>{share_pct}</b></div>
         </div>
     """,
     "style": {
