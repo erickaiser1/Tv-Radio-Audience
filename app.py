@@ -51,7 +51,6 @@ def carregar_dados_e_malha():
       ("TO", "Tocantins"),
   ]
 
-  # [NOVO] Dicionários separados por tipo de mídia
   tv_config = {
       "Globo": {"base": 14.5, "var": 3.5, "cor_rgb": [2, 132, 199]},
       "Record": {"base": 6.5, "var": 2.8, "cor_rgb": [225, 29, 72]},
@@ -83,7 +82,6 @@ def carregar_dados_e_malha():
       if faixa == "Todas as Faixas":
         continue
       for uf, nome_estado in estados_br:
-        # Loop para inserção de dados de TV
         for emissora, cfg in tv_config.items():
           bonus = (
               2.2
@@ -103,7 +101,6 @@ def carregar_dados_e_malha():
               "share_pct": round(pts * 2.1, 1),
           })
 
-        # Loop para inserção de dados de Rádio
         for emissora, cfg in radio_config.items():
           bonus = (
               2.5
@@ -148,10 +145,8 @@ def carregar_dados_e_malha():
 # 2. Painel de Controle Lateral (Sidebar)
 st.sidebar.header("🎛️ Filtros do Painel")
 
-# [NOVO] Filtro para alternar entre TV e Rádio
 tipo_midia = st.sidebar.radio("Selecione a Mídia:", ["TV", "Rádio"])
 
-# Define dinamicamente as opções do multiselect com base na mídia escolhida
 emissoras_config = tv_config if tipo_midia == "TV" else radio_config
 default_emissoras = (
     ["SBT", "Band"] if tipo_midia == "TV" else ["Band FM", "Nativa FM"]
@@ -178,7 +173,7 @@ dd_data = st.sidebar.selectbox(
 
 dd_hora = st.sidebar.selectbox(
     "Faixa Horária:", faixas_list, index=3
-)  # Padrão: Horário Nobre
+)
 
 # 3. Lógica de Filtragem com Pandas
 if not emissoras_selecionadas:
@@ -186,7 +181,6 @@ if not emissoras_selecionadas:
 if not estados_selecionados:
   estados_selecionados = lista_ufs
 
-# [ALTERADO] Filtra por tipo de mídia, emissoras/rádios e estados simultaneamente
 df_f = df_ibope[
     (df_ibope["midia"] == tipo_midia)
     & (df_ibope["emissora"].isin(emissoras_selecionadas))
@@ -234,13 +228,20 @@ if modo_comparacao:
       cor_em = emissoras_config[row["emissora"]]["cor_rgb"]
       cor_css = f"rgb({cor_em[0]},{cor_em[1]},{cor_em[2]})"
       badge = "🏆 " if idx == 0 else ""
+      # [CORRIGIDO] Substituído Flexbox por tabela HTML compatível com o PyDeck Tooltip
       linhas.append(
-          f"<div style='display:flex; justify-content:space-between;"
-          f" font-size:12px; margin-top:3px;'><span"
-          f" style='color:{cor_css}; font-weight:800;'>{badge}{row['emissora']}</span><span><b>{row['pontos_ibope']:.1f}"
-          f" pts</b> ({row['share_pct']:.1f}%)</span></div>"
+          f"<tr>"
+          f"<td style='padding-right: 12px; color:{cor_css};"
+          f" font-weight:800; font-size:12px;'>{badge}{row['emissora']}</td>"
+          f"<td style='text-align: right; font-size:12px;'><b>{row['pontos_ibope']:.1f}</b>"
+          f" pts ({row['share_pct']:.1f}%)</td>"
+          f"</tr>"
       )
-    ranking_por_uf[uf] = "".join(linhas)
+    # [CORRIGIDO] Envolve as linhas em uma estrutura de tabela limpa
+    ranking_por_uf[uf] = (
+        f"<table"
+        f" style='width:100%; border-collapse:collapse; margin-top:4px;'>{''.join(linhas)}</table>"
+    )
 
   for feature in geojson_dinamico["features"]:
     uf = feature["properties"]["sigla"]
@@ -328,7 +329,7 @@ else:
 st.markdown(
     f"""
 <div style='font-family: Segoe UI, sans-serif; background: #F8FAFC; border: 1px solid #CBD5E1; border-radius: 8px; padding: 12px 18px; margin-bottom: 12px;'>
-    <div style='display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; border-bottom: 1px solid #E2E8F0; padding-bottom: 8px; margin-bottom: 8px;'>
+    <div style='display: flex; justify-content: space-align; align-items: center; flex-wrap: wrap; gap: 10px; border-bottom: 1px solid #E2E8F0; padding-bottom: 8px; margin-bottom: 8px;'>
         <span style='font-size: 11px; font-weight: 800; color: #334155; text-transform: uppercase;'>Comparativo Ativo ({tipo_midia}):</span>
         {bloco_legenda}
     </div>
@@ -361,7 +362,7 @@ view_state = pdk.ViewState(
 
 tooltip = {
     "html": """
-        <div style='font-family: Segoe UI, sans-serif; padding: 8px; min-width: 205px;'>
+        <div style='font-family: Segoe UI, sans-serif; padding: 8px; min-width: 215px;'>
             <div style='font-size: 10px; color: #64748B; text-transform: uppercase; font-weight: bold;'>Estado ({sigla})</div>
             <div style='font-size: 14px; font-weight: 800; color: #0284C7;'>{name}</div>
             <div style='font-size: 11px; font-weight: 800; color: #334155; margin-bottom: 6px; border-bottom: 1px solid #E2E8F0; padding-bottom: 4px;'>{titulo_destaque}</div>
