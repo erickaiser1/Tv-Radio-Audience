@@ -1,4 +1,4 @@
-from datetime import datetime, timedelta
+from datetime import datetime
 import json
 import urllib.request
 import numpy as np
@@ -8,13 +8,15 @@ import streamlit as st
 
 # Configuração da página em modo Widescreen
 st.set_page_config(
-    page_title="Dashboard Geoespacial - Audiência de TV & Rádio", layout="wide"
+    page_title="Dashboard Geoespacial - Audiência em Tempo Real", layout="wide"
 )
 
-st.title("📻📺 Dashboard Nacional de Mídia: TV & Rádio (Kantar Ibope Standards)")
+st.title(
+    "📻📺 Dashboard Nacional de Mídia: Tempo Real (Data Atual - Hora a Hora)"
+)
 
 
-# 1. Carregamento de Dados com Cache (expira a cada 1h para atualizar as datas)
+# 1. Carregamento de Dados com Cache (expira a cada 1h)
 @st.cache_data(ttl="1h")
 def carregar_dados_e_malha():
   url_geojson_br = "https://raw.githubusercontent.com/codeforamerica/click_that_hood/master/public/data/brazil-states.geojson"
@@ -68,27 +70,20 @@ def carregar_dados_e_malha():
       "Rádio Bandeirantes": {"base": 5.0, "var": 1.5, "cor_rgb": [15, 23, 42]},
   }
 
-  # Geração dinâmica das 3 últimas datas com base no dia atual
-  hoje = datetime.now()
-  datas_disponiveis = [
-      (hoje - timedelta(days=3)).strftime("%d/%m/%Y"),
-      (hoje - timedelta(days=2)).strftime("%d/%m/%Y"),
-      (hoje - timedelta(days=1)).strftime("%d/%m/%Y"),
-  ]
+  # Apenas a data de hoje formatada
+  hoje_str = datetime.now().strftime("%d/%m/%Y")
+  datas_disponiveis = [hoje_str]
 
-  faixas_horarias = {
-      "Todas as Faixas": 1.0,
-      "06h00 - 12h00 (Manhã)": 0.75,
-      "12h00 - 18h00 (Tarde)": 0.95,
-      "18h00 - 00h00 (Horário Nobre)": 1.45,
-      "00h00 - 06h00 (Madrugada)": 0.40,
-  }
+  # Horas do dia (ex: das 06h até as 22h, ou todas as horas cheias)
+  horas_do_dia = [f"{h:02d}:00" for h in range(6, 24)]
 
   registros = []
   for dt in datas_disponiveis:
-    for faixa, mult_hora in faixas_horarias.items():
-      if faixa == "Todas as Faixas":
-        continue
+    for hora in horas_do_dia:
+      # Fator multiplicador simulado baseado no horário do dia (ex: pico no horário nobre)
+      h_int = int(hora.split(":")[0])
+      mult_hora = 1.4 if 18 <= h_int <= 22 else (0.8 if h_int < 12 else 1.0)
+
       for uf, nome_estado in estados_br:
         for emissora, cfg in tv_config.items():
           bonus = (
@@ -101,7 +96,7 @@ def carregar_dados_e_malha():
           registros.append({
               "midia": "TV",
               "data": dt,
-              "faixa_hora": faixa,
+              "hora": hora,
               "uf": uf,
               "estado": nome_estado,
               "emissora": emissora,
@@ -121,7 +116,7 @@ def carregar_dados_e_malha():
           registros.append({
               "midia": "Rádio",
               "data": dt,
-              "faixa_hora": faixa,
+              "hora": hora,
               "uf": uf,
               "estado": nome_estado,
               "emissora": emissora,
@@ -135,7 +130,7 @@ def carregar_dados_e_malha():
       tv_config,
       radio_config,
       datas_disponiveis,
-      list(faixas_horarias.keys()),
+      horas_do_dia,
       [uf for uf, _ in estados_br],
   )
 
@@ -146,12 +141,12 @@ def carregar_dados_e_malha():
     tv_config,
     radio_config,
     datas_disponiveis,
-    faixas_list,
+    horas_list,
     lista_ufs,
 ) = carregar_dados_e_malha()
 
 # 2. Painel de Controle Lateral (Sidebar)
-st.sidebar.header("🎛️ Filtros do Painel")
+st.sidebar.header("🎛️ Filtros em Tempo Real")
 
 tipo_midia = st.sidebar.radio("Selecione a Mídia:", ["TV", "Rádio"])
 
@@ -175,19 +170,15 @@ dd_ordenacao = st.sidebar.selectbox(
     ["Maior Audiência (Desc)", "Menor Audiência (Asc)", "Estado (A-Z)"],
 )
 
-dd_data = st.sidebar.selectbox(
-    "Data:", ["Todas as Datas"] + datas_disponiveis
-)
-
-dd_hora = st.sidebar.selectbox(
-    "Faixa Horária:", faixas_list, index=3
-)
+# Fixado na data de hoje, selecionando a hora específica
+st.sidebar.markdown(f"📅 **Data Referência:** `{datas_disponiveis[0]}`")
+dd_hora = st.sidebar.selectbox("Hora Exata:", horas_list, index=len(horas_list) - 6 if len(horas_list) >= 6 else 0)
 
 st.sidebar.markdown("---")
 st.sidebar.caption("🔄 *Atualização automática a cada 1 hora.*")
 
 
-# 3. Bloco com atualização automática a cada 1 hora (@st.fragment)[cite: 1]
+# 3. Bloco com atualização automática a cada 1 hora (@st.fragment)
 @st.fragment(run_every="1h")
 def renderizar_conteudo_dinamico():
   local_emissoras = (
@@ -197,16 +188,14 @@ def renderizar_conteudo_dinamico():
   )
   local_estados = estados_selecionados if estados_selecionados else lista_ufs
 
+  # Filtra pelos dados da data de hoje, hora selecionada, mídia e UFs
   df_f = df_ibope[
       (df_ibope["midia"] == tipo_midia)
+      & (df_ibope["data"] == datas_disponiveis[0])
+      & (df_ibope["hora"] == dd_hora)
       & (df_ibope["emissora"].isin(local_emissoras))
       & (df_ibope["uf"].isin(local_estados))
   ].copy()
-
-  if dd_data != "Todas as Datas":
-    df_f = df_f[df_f["data"] == dd_data]
-  if dd_hora != "Todas as Faixas":
-    df_f = df_f[df_f["faixa_hora"] == dd_hora]
 
   df_agg = df_f.groupby(["uf", "estado", "emissora"], as_index=False).agg({
       "pontos_ibope": "mean",
@@ -251,7 +240,7 @@ def renderizar_conteudo_dinamico():
         feature["properties"]["share_pct"] = f"{shr:.1f}%"
         feature["properties"]["fill_color"] = [r, g, b, 205]
       else:
-        feature["properties"]["titulo_destaque"] = "Sem dados no período"
+        feature["properties"]["titulo_destaque"] = "Sem dados na hora"
         feature["properties"]["veiculo_destaque"] = "-"
         feature["properties"]["pontos_ibope"] = "0.0 pts"
         feature["properties"]["share_pct"] = "0.0%"
@@ -327,18 +316,18 @@ def renderizar_conteudo_dinamico():
         for i, (_, r) in enumerate(df_rank.head(5).iterrows())
     ])
   else:
-    top5_items = "Nenhum dado encontrado para os filtros selecionados."
+    top5_items = "Nenhum dado encontrado para a hora selecionada."
 
-  # 4. Renderização HTML e Mapa PyDeck na Tela Principal
+  # 4. Renderização do Painel e Mapa
   st.markdown(
       f"""
     <div style='font-family: Segoe UI, sans-serif; background: #F8FAFC; border: 1px solid #CBD5E1; border-radius: 8px; padding: 12px 18px; margin-bottom: 12px;'>
         <div style='display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; border-bottom: 1px solid #E2E8F0; padding-bottom: 8px; margin-bottom: 8px;'>
-            <span style='font-size: 11px; font-weight: 800; color: #334155; text-transform: uppercase;'>Comparativo Ativo ({tipo_midia}):</span>
+            <span style='font-size: 11px; font-weight: 800; color: #334155; text-transform: uppercase;'>Hora Selecionada: {dd_hora} ({tipo_midia})</span>
             {bloco_legenda}
         </div>
         <div style='font-size: 12px; color: #0F172A;'>
-            <span style='font-size: 11px; font-weight: 800; color: #0284C7; text-transform: uppercase;'>Ranking ({dd_ordenacao.split(' ')[0]}): </span>
+            <span style='font-size: 11px; font-weight: 800; color: #0284C7; text-transform: uppercase;'>Ranking às {dd_hora}: </span>
             {top5_items}
         </div>
     </div>
@@ -393,5 +382,5 @@ def renderizar_conteudo_dinamico():
   st.pydeck_chart(deck, use_container_width=True)
 
 
-# Executa o bloco que se atualiza sozinho a cada hora
+# Executa o bloco atualizável
 renderizar_conteudo_dinamico()
