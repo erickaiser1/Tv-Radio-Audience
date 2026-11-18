@@ -1,3 +1,4 @@
+from datetime import datetime, timedelta
 import json
 import urllib.request
 import numpy as np
@@ -13,8 +14,8 @@ st.set_page_config(
 st.title("📻📺 Dashboard Nacional de Mídia: TV & Rádio (Kantar Ibope Standards)")
 
 
-# 1. Carregamento de Dados com Cache e Suporte a Múltiplas Mídias
-@st.cache_data
+# 1. Carregamento de Dados com Cache (expira a cada 1h para atualizar as datas)
+@st.cache_data(ttl="1h")
 def carregar_dados_e_malha():
   url_geojson_br = "https://raw.githubusercontent.com/codeforamerica/click_that_hood/master/public/data/brazil-states.geojson"
   with urllib.request.urlopen(url_geojson_br) as response:
@@ -67,7 +68,14 @@ def carregar_dados_e_malha():
       "Rádio Bandeirantes": {"base": 5.0, "var": 1.5, "cor_rgb": [15, 23, 42]},
   }
 
-  datas_disponiveis = ["14/11/2026", "15/11/2026", "16/11/2026"]
+  # Geração dinâmica das 3 últimas datas com base no dia atual
+  hoje = datetime.now()
+  datas_disponiveis = [
+      (hoje - timedelta(days=3)).strftime("%d/%m/%Y"),
+      (hoje - timedelta(days=2)).strftime("%d/%m/%Y"),
+      (hoje - timedelta(days=1)).strftime("%d/%m/%Y"),
+  ]
+
   faixas_horarias = {
       "Todas as Faixas": 1.0,
       "06h00 - 12h00 (Manhã)": 0.75,
@@ -175,201 +183,215 @@ dd_hora = st.sidebar.selectbox(
     "Faixa Horária:", faixas_list, index=3
 )
 
-# 3. Lógica de Filtragem com Pandas
-if not emissoras_selecionadas:
-  emissoras_selecionadas = list(emissoras_config.keys())
-if not estados_selecionados:
-  estados_selecionados = lista_ufs
+st.sidebar.markdown("---")
+st.sidebar.caption("🔄 *Atualização automática a cada 1 hora.*")
 
-df_f = df_ibope[
-    (df_ibope["midia"] == tipo_midia)
-    & (df_ibope["emissora"].isin(emissoras_selecionadas))
-    & (df_ibope["uf"].isin(estados_selecionados))
-].copy()
 
-if dd_data != "Todas as Datas":
-  df_f = df_f[df_f["data"] == dd_data]
-if dd_hora != "Todas as Faixas":
-  df_f = df_f[df_f["faixa_hora"] == dd_hora]
-
-df_agg = df_f.groupby(["uf", "estado", "emissora"], as_index=False).agg({
-    "pontos_ibope": "mean",
-    "share_pct": "mean",
-})
-df_agg["pontos_ibope"] = df_agg["pontos_ibope"].round(1)
-df_agg["share_pct"] = df_agg["share_pct"].round(1)
-
-geojson_dinamico = json.loads(json.dumps(geojson_brasil))
-modo_comparacao = len(emissoras_selecionadas) > 1
-
-geojson_dinamico["features"] = [
-    f
-    for f in geojson_dinamico["features"]
-    if f["properties"]["sigla"] in estados_selecionados
-]
-
-if modo_comparacao:
-  is_ascending = True if dd_ordenacao == "Menor Audiência (Asc)" else False
-  titulo_prefixo = (
-      "MENOR AUDIÊNCIA: " if is_ascending else "MAIOR AUDIÊNCIA: "
+# 3. Bloco com atualização automática a cada 1 hora (@st.fragment)[cite: 1]
+@st.fragment(run_every="1h")
+def renderizar_conteudo_dinamico():
+  local_emissoras = (
+      emissoras_selecionadas
+      if emissoras_selecionadas
+      else list(emissoras_config.keys())
   )
+  local_estados = estados_selecionados if estados_selecionados else lista_ufs
 
-  df_lideres = df_agg.sort_values(
-      "pontos_ibope", ascending=is_ascending
-  ).drop_duplicates("uf")
-  df_mapa = df_lideres.set_index("uf")
+  df_f = df_ibope[
+      (df_ibope["midia"] == tipo_midia)
+      & (df_ibope["emissora"].isin(local_emissoras))
+      & (df_ibope["uf"].isin(local_estados))
+  ].copy()
 
-  for feature in geojson_dinamico["features"]:
-    uf = feature["properties"]["sigla"]
-    if uf in df_mapa.index:
-      lider = df_mapa.loc[uf, "emissora"]
-      pts = float(df_mapa.loc[uf, "pontos_ibope"])
-      shr = float(df_mapa.loc[uf, "share_pct"])
-      r, g, b = emissoras_config[lider]["cor_rgb"]
+  if dd_data != "Todas as Datas":
+    df_f = df_f[df_f["data"] == dd_data]
+  if dd_hora != "Todas as Faixas":
+    df_f = df_f[df_f["faixa_hora"] == dd_hora]
 
-      feature["properties"]["titulo_destaque"] = f"{titulo_prefixo}{lider}"
-      # [CORRIGIDO] Atribuição de propriedades primitivas limpas (evita injeção de HTML complexo)
-      feature["properties"]["veiculo_destaque"] = lider
-      feature["properties"]["pontos_ibope"] = f"{pts:.1f} pts"
-      feature["properties"]["share_pct"] = f"{shr:.1f}%"
-      feature["properties"]["fill_color"] = [r, g, b, 205]
-    else:
-      feature["properties"]["titulo_destaque"] = "Sem dados no período"
-      feature["properties"]["veiculo_destaque"] = "-"
-      feature["properties"]["pontos_ibope"] = "0.0 pts"
-      feature["properties"]["share_pct"] = "0.0%"
-      feature["properties"]["fill_color"] = [203, 213, 225, 80]
+  df_agg = df_f.groupby(["uf", "estado", "emissora"], as_index=False).agg({
+      "pontos_ibope": "mean",
+      "share_pct": "mean",
+  })
+  df_agg["pontos_ibope"] = df_agg["pontos_ibope"].round(1)
+  df_agg["share_pct"] = df_agg["share_pct"].round(1)
 
-  itens_legenda = "".join([
-      f"<span style='display:inline-flex; align-items:center; gap:5px;"
-      f" font-size:12px; font-weight:800;'><span style='width:12px;"
-      f" height:12px; border-radius:3px;"
-      f" background:rgb({emissoras_config[em]['cor_rgb'][0]},{emissoras_config[em]['cor_rgb'][1]},{emissoras_config[em]['cor_rgb'][2]});"
-      f" display:inline-block;'></span>{em}</span>"
-      for em in emissoras_selecionadas
-  ])
-  bloco_legenda = (
-      f"<div style='display:flex; gap:14px; flex-wrap:wrap;'>"
-      f"{itens_legenda}</div>"
-  )
-else:
-  emissora_unica = emissoras_selecionadas[0]
-  df_mapa = df_agg[df_agg["emissora"] == emissora_unica].set_index("uf")
-  max_pts = df_mapa["pontos_ibope"].max() if not df_mapa.empty else 1.0
-  min_pts = df_mapa["pontos_ibope"].min() if not df_mapa.empty else 0.0
-  r_base, g_base, b_base = emissoras_config[emissora_unica]["cor_rgb"]
+  geojson_dinamico = json.loads(json.dumps(geojson_brasil))
+  modo_comparacao = len(local_emissoras) > 1
 
-  for feature in geojson_dinamico["features"]:
-    uf = feature["properties"]["sigla"]
-    if uf in df_mapa.index:
-      pts = float(df_mapa.loc[uf, "pontos_ibope"])
-      shr = float(df_mapa.loc[uf, "share_pct"])
-      norm = (pts - min_pts) / max((max_pts - min_pts), 0.1)
-      alpha = int(65 + (norm * 175))
+  geojson_dinamico["features"] = [
+      f
+      for f in geojson_dinamico["features"]
+      if f["properties"]["sigla"] in local_estados
+  ]
 
-      feature["properties"]["titulo_destaque"] = f"VEÍCULO: {emissora_unica}"
-      feature["properties"]["veiculo_destaque"] = emissora_unica
-      feature["properties"]["pontos_ibope"] = f"{pts:.1f} pts"
-      feature["properties"]["share_pct"] = f"{shr:.1f}%"
-      feature["properties"]["fill_color"] = [r_base, g_base, b_base, alpha]
-    else:
-      feature["properties"]["titulo_destaque"] = "Sem dados"
-      feature["properties"]["veiculo_destaque"] = "-"
-      feature["properties"]["pontos_ibope"] = "0.0 pts"
-      feature["properties"]["share_pct"] = "0.0%"
-      feature["properties"]["fill_color"] = [203, 213, 225, 80]
+  if modo_comparacao:
+    is_ascending = True if dd_ordenacao == "Menor Audiência (Asc)" else False
+    titulo_prefixo = (
+        "MENOR AUDIÊNCIA: " if is_ascending else "MAIOR AUDIÊNCIA: "
+    )
 
-  bloco_legenda = (
-      f"<div style='display:flex; align-items:center; gap:8px;'><span"
-      f" style='font-size:11px; color:#64748B;'>Mín: {min_pts:.1f}"
-      f" pts</span><div style='width:140px; height:11px; border-radius:5px;"
-      f" background:linear-gradient(90deg,"
-      f" rgba({r_base},{g_base},{b_base},0.25) 0%,"
-      f" rgba({r_base},{g_base},{b_base},0.95)"
-      f" 100%);'></div><span style='font-size:11px; font-weight:800;'>Máx:"
-      f" {max_pts:.1f} pts</span></div>"
-  )
+    df_lideres = df_agg.sort_values(
+        "pontos_ibope", ascending=is_ascending
+    ).drop_duplicates("uf")
+    df_mapa = df_lideres.set_index("uf")
 
-if modo_comparacao:
-  df_rank = df_agg.copy()
-else:
-  df_rank = df_mapa.reset_index().copy()
+    for feature in geojson_dinamico["features"]:
+      uf = feature["properties"]["sigla"]
+      if uf in df_mapa.index:
+        lider = df_mapa.loc[uf, "emissora"]
+        pts = float(df_mapa.loc[uf, "pontos_ibope"])
+        shr = float(df_mapa.loc[uf, "share_pct"])
+        r, g, b = emissoras_config[lider]["cor_rgb"]
 
-if not df_rank.empty:
-  if dd_ordenacao == "Maior Audiência (Desc)":
-    df_rank = df_rank.sort_values("pontos_ibope", ascending=False)
-  elif dd_ordenacao == "Menor Audiência (Asc)":
-    df_rank = df_rank.sort_values("pontos_ibope", ascending=True)
+        feature["properties"]["titulo_destaque"] = (
+            f"{titulo_prefixo}{lider}"
+        )
+        feature["properties"]["veiculo_destaque"] = lider
+        feature["properties"]["pontos_ibope"] = f"{pts:.1f} pts"
+        feature["properties"]["share_pct"] = f"{shr:.1f}%"
+        feature["properties"]["fill_color"] = [r, g, b, 205]
+      else:
+        feature["properties"]["titulo_destaque"] = "Sem dados no período"
+        feature["properties"]["veiculo_destaque"] = "-"
+        feature["properties"]["pontos_ibope"] = "0.0 pts"
+        feature["properties"]["share_pct"] = "0.0%"
+        feature["properties"]["fill_color"] = [203, 213, 225, 80]
+
+    itens_legenda = "".join([
+        f"<span style='display:inline-flex; align-items:center; gap:5px;"
+        f" font-size:12px; font-weight:800;'><span style='width:12px;"
+        f" height:12px; border-radius:3px;"
+        f" background:rgb({emissoras_config[em]['cor_rgb'][0]},{emissoras_config[em]['cor_rgb'][1]},{emissoras_config[em]['cor_rgb'][2]});"
+        f" display:inline-block;'></span>{em}</span>"
+        for em in local_emissoras
+    ])
+    bloco_legenda = (
+        f"<div style='display:flex; gap:14px; flex-wrap:wrap;'>"
+        f"{itens_legenda}</div>"
+    )
   else:
-    df_rank = df_rank.sort_values("estado", ascending=True)
+    emissora_unica = local_emissoras[0]
+    df_mapa = df_agg[df_agg["emissora"] == emissora_unica].set_index("uf")
+    max_pts = df_mapa["pontos_ibope"].max() if not df_mapa.empty else 1.0
+    min_pts = df_mapa["pontos_ibope"].min() if not df_mapa.empty else 0.0
+    r_base, g_base, b_base = emissoras_config[emissora_unica]["cor_rgb"]
 
-  top5_items = " &nbsp;|&nbsp; ".join([
-      f"<b>#{i+1} {r['uf']}</b>: {r['pontos_ibope']:.1f} pts ({r['emissora']})"
-      for i, (_, r) in enumerate(df_rank.head(5).iterrows())
-  ])
-else:
-  top5_items = "Nenhum dado encontrado para os filtros selecionados."
+    for feature in geojson_dinamico["features"]:
+      uf = feature["properties"]["sigla"]
+      if uf in df_mapa.index:
+        pts = float(df_mapa.loc[uf, "pontos_ibope"])
+        shr = float(df_mapa.loc[uf, "share_pct"])
+        norm = (pts - min_pts) / max((max_pts - min_pts), 0.1)
+        alpha = int(65 + (norm * 175))
 
-# 4. Renderização HTML e Mapa PyDeck na Tela Principal
-st.markdown(
-    f"""
-<div style='font-family: Segoe UI, sans-serif; background: #F8FAFC; border: 1px solid #CBD5E1; border-radius: 8px; padding: 12px 18px; margin-bottom: 12px;'>
-    <div style='display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; border-bottom: 1px solid #E2E8F0; padding-bottom: 8px; margin-bottom: 8px;'>
-        <span style='font-size: 11px; font-weight: 800; color: #334155; text-transform: uppercase;'>Comparativo Ativo ({tipo_midia}):</span>
-        {bloco_legenda}
-    </div>
-    <div style='font-size: 12px; color: #0F172A;'>
-        <span style='font-size: 11px; font-weight: 800; color: #0284C7; text-transform: uppercase;'>Ranking ({dd_ordenacao.split(' ')[0]}): </span>
-        {top5_items}
-    </div>
-</div>
-""",
-    unsafe_allow_html=True,
-)
+        feature["properties"]["titulo_destaque"] = (
+            f"VEÍCULO: {emissora_unica}"
+        )
+        feature["properties"]["veiculo_destaque"] = emissora_unica
+        feature["properties"]["pontos_ibope"] = f"{pts:.1f} pts"
+        feature["properties"]["share_pct"] = f"{shr:.1f}%"
+        feature["properties"]["fill_color"] = [r_base, g_base, b_base, alpha]
+      else:
+        feature["properties"]["titulo_destaque"] = "Sem dados"
+        feature["properties"]["veiculo_destaque"] = "-"
+        feature["properties"]["pontos_ibope"] = "0.0 pts"
+        feature["properties"]["share_pct"] = "0.0%"
+        feature["properties"]["fill_color"] = [203, 213, 225, 80]
 
-camada_estados = pdk.Layer(
-    "GeoJsonLayer",
-    data=geojson_dinamico,
-    stroked=True,
-    filled=True,
-    extruded=False,
-    get_fill_color="properties.fill_color",
-    get_line_color=[15, 23, 42, 160],
-    link_width_min_pixels=1.2,
-    pickable=True,
-    auto_highlight=True,
-    highlight_color=[250, 204, 21, 140],
-)
+    bloco_legenda = (
+        f"<div style='display:flex; align-items:center; gap:8px;'><span"
+        f" style='font-size:11px; color:#64748B;'>Mín: {min_pts:.1f}"
+        f" pts</span><div style='width:140px; height:11px; border-radius:5px;"
+        f" background:linear-gradient(90deg,"
+        f" rgba({r_base},{g_base},{b_base},0.25) 0%,"
+        f" rgba({r_base},{g_base},{b_base},0.95)"
+        f" 100%);'></div><span style='font-size:11px; font-weight:800;'>Máx:"
+        f" {max_pts:.1f} pts</span></div>"
+    )
 
-view_state = pdk.ViewState(
-    latitude=-14.2350, longitude=-51.9253, zoom=3.4, pitch=0, bearing=0
-)
+  if modo_comparacao:
+    df_rank = df_agg.copy()
+  else:
+    df_rank = df_mapa.reset_index().copy()
 
-# [CORRIGIDO] Template fixo seguro em HTML nativo do deck.gl interpolando apenas propriedades textuais puras
-tooltip = {
-    "html": """
-        <div style='font-family: Segoe UI, sans-serif; padding: 8px; min-width: 200px;'>
-            <div style='font-size: 10px; color: #64748B; text-transform: uppercase; font-weight: bold;'>Estado ({sigla})</div>
-            <div style='font-size: 14px; font-weight: 800; color: #0284C7;'>{name}</div>
-            <div style='font-size: 11px; font-weight: 800; color: #334155; margin-bottom: 6px; border-bottom: 1px solid #E2E8F0; padding-bottom: 4px;'>{titulo_destaque}</div>
-            <div style='font-size: 12px; margin-top: 4px;'>Veículo: <b>{veiculo_destaque}</b></div>
-            <div style='font-size: 12px;'>Audiência: <b>{pontos_ibope}</b></div>
-            <div style='font-size: 12px;'>Share: <b>{share_pct}</b></div>
+  if not df_rank.empty:
+    if dd_ordenacao == "Maior Audiência (Desc)":
+      df_rank = df_rank.sort_values("pontos_ibope", ascending=False)
+    elif dd_ordenacao == "Menor Audiência (Asc)":
+      df_rank = df_rank.sort_values("pontos_ibope", ascending=True)
+    else:
+      df_rank = df_rank.sort_values("estado", ascending=True)
+
+    top5_items = " &nbsp;|&nbsp; ".join([
+        f"<b>#{i+1} {r['uf']}</b>: {r['pontos_ibope']:.1f} pts ({r['emissora']})"
+        for i, (_, r) in enumerate(df_rank.head(5).iterrows())
+    ])
+  else:
+    top5_items = "Nenhum dado encontrado para os filtros selecionados."
+
+  # 4. Renderização HTML e Mapa PyDeck na Tela Principal
+  st.markdown(
+      f"""
+    <div style='font-family: Segoe UI, sans-serif; background: #F8FAFC; border: 1px solid #CBD5E1; border-radius: 8px; padding: 12px 18px; margin-bottom: 12px;'>
+        <div style='display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 10px; border-bottom: 1px solid #E2E8F0; padding-bottom: 8px; margin-bottom: 8px;'>
+            <span style='font-size: 11px; font-weight: 800; color: #334155; text-transform: uppercase;'>Comparativo Ativo ({tipo_midia}):</span>
+            {bloco_legenda}
         </div>
+        <div style='font-size: 12px; color: #0F172A;'>
+            <span style='font-size: 11px; font-weight: 800; color: #0284C7; text-transform: uppercase;'>Ranking ({dd_ordenacao.split(' ')[0]}): </span>
+            {top5_items}
+        </div>
+    </div>
     """,
-    "style": {
-        "backgroundColor": "#FFFFFF",
-        "border": "1px solid #CBD5E1",
-        "borderRadius": "8px",
-        "boxShadow": "0 4px 10px rgba(0, 0, 0, 0.12)",
-    },
-}
+      unsafe_allow_html=True,
+  )
 
-deck = pdk.Deck(
-    layers=[camada_estados],
-    initial_view_state=view_state,
-    tooltip=tooltip,
-    map_style="https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
-)
+  camada_estados = pdk.Layer(
+      "GeoJsonLayer",
+      data=geojson_dinamico,
+      stroked=True,
+      filled=True,
+      extruded=False,
+      get_fill_color="properties.fill_color",
+      get_line_color=[15, 23, 42, 160],
+      link_width_min_pixels=1.2,
+      pickable=True,
+      auto_highlight=True,
+      highlight_color=[250, 204, 21, 140],
+  )
 
-st.pydeck_chart(deck, use_container_width=True)
+  view_state = pdk.ViewState(
+      latitude=-14.2350, longitude=-51.9253, zoom=3.4, pitch=0, bearing=0
+  )
+
+  tooltip = {
+      "html": """
+            <div style='font-family: Segoe UI, sans-serif; padding: 8px; min-width: 200px;'>
+                <div style='font-size: 10px; color: #64748B; text-transform: uppercase; font-weight: bold;'>Estado ({sigla})</div>
+                <div style='font-size: 14px; font-weight: 800; color: #0284C7;'>{name}</div>
+                <div style='font-size: 11px; font-weight: 800; color: #334155; margin-bottom: 6px; border-bottom: 1px solid #E2E8F0; padding-bottom: 4px;'>{titulo_destaque}</div>
+                <div style='font-size: 12px; margin-top: 4px;'>Veículo: <b>{veiculo_destaque}</b></div>
+                <div style='font-size: 12px;'>Audiência: <b>{pontos_ibope}</b></div>
+                <div style='font-size: 12px;'>Share: <b>{share_pct}</b></div>
+            </div>
+        """,
+      "style": {
+          "backgroundColor": "#FFFFFF",
+          "border": "1px solid #CBD5E1",
+          "borderRadius": "8px",
+          "boxShadow": "0 4px 10px rgba(0, 0, 0, 0.12)",
+      },
+  }
+
+  deck = pdk.Deck(
+      layers=[camada_estados],
+      initial_view_state=view_state,
+      tooltip=tooltip,
+      map_style="https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
+  )
+
+  st.pydeck_chart(deck, use_container_width=True)
+
+
+# Executa o bloco que se atualiza sozinho a cada hora
+renderizar_conteudo_dinamico()
